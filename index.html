@@ -3,7 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script 
+        // Substitua pelas suas credenciais reais do Supabase
+        const SUPABASE_URL = 'https://uggttooqhqammyeffuye.supabase.co/rest/v1/';
+        const SUPABASE_ANON_KEY = 'sb_publishable_5RnTfB_hGlFzGyaddn2LGw_TOBEPCLp';
+        const { createClient } = supabase;
+        const dbSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <title>Segundo Cérebro - Hub & Manuais de Carreira</title>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <style>
