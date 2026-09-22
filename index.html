@@ -3,14 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script 
-        // Substitua pelas suas credenciais reais do Supabase
-        const SUPABASE_URL = 'https://uggttooqhqammyeffuye.supabase.co/rest/v1/';
-        const SUPABASE_ANON_KEY = 'sb_publishable_5RnTfB_hGlFzGyaddn2LGw_TOBEPCLp';
-        const { createClient } = supabase;
-        const dbSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <title>Segundo Cérebro - Hub & Manuais de Carreira</title>
+    <title>Segundo Cérebro - Hub & Manuais Online (Supabase)</title>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         :root {
             --bg-body: #0f172a;
@@ -43,7 +38,11 @@
         body { font-family: sans-serif; background: var(--bg-body); color: var(--text-color); padding: 20px; line-height: 1.6; transition: background 0.3s, color 0.3s; }
         .menu-container { max-width: 900px; margin: 0 auto; box-sizing: border-box; }
         
-        .top-bar-header { display: flex; justify-content: flex-end; align-items: center; margin-bottom: 20px; }
+        .top-bar-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px; }
+        .sync-status-badge { font-size: 0.75rem; padding: 4px 10px; border-radius: 12px; background: #334155; color: #f8fafc; font-weight: bold; display: flex; align-items: center; gap: 5px; }
+        .sync-status-badge.synced { background: #10b981; color: #fff; }
+        .sync-status-badge.syncing { background: #f59e0b; color: #fff; }
+
         .theme-toggle-btn { background: var(--card-bg); color: var(--accent-color); border: 1px solid var(--border-color); padding: 8px 14px; border-radius: 20px; cursor: pointer; font-weight: bold; font-size: 0.85rem; display: flex; align-items: center; gap: 6px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
         .theme-toggle-btn:hover { border-color: var(--accent-color); }
 
@@ -200,14 +199,15 @@
 
 <div class="menu-container">
     <div class="top-bar-header">
+        <div id="sync-status" class="sync-status-badge">☁️ Conectando Supabase...</div>
         <button id="theme-toggle-btn" class="theme-toggle-btn" onclick="alternarTema()">
             <span id="theme-icon">🌙</span> <span id="theme-text">Modo Escuro</span>
         </button>
     </div>
 
     <div id="hub-view">
-        <h1>Painel Central - Segundo Cérebro</h1>
-        <p>Selecione abaixo o manual estratégico que deseja acessar e gerenciar:</p>
+        <h1>Painel Central - Segundo Cérebro (Online)</h1>
+        <p>Selecione abaixo o manual estratégico sincronizado na nuvem:</p>
         <div class="cards-grid">
             <div class="card" onclick="abrirManual('freela')">
                 <span class="icon">💼</span>
@@ -487,7 +487,7 @@
     <div class="modal-content">
         <button class="modal-close" onclick="fecharRelatorioSemanal()">✕ Fechar</button>
         <h2 id="modal-relatorio-titulo" style="color: var(--accent-color); margin-top: 0;">Relatório Semanal Executivo</h2>
-        <p style="font-size: 0.85rem; color: var(--muted-text);">Análise automatizada baseada nas suas conclusões, diários de bordo e prazos salvos no navegador.</p>
+        <p style="font-size: 0.85rem; color: var(--muted-text);">Análise automatizada baseada nas suas conclusões, diários de bordo e prazos salvos na nuvem.</p>
         <div id="modal-relatorio-corpo"></div>
         <div style="margin-top: 20px; display: flex; gap: 10px;">
             <button onclick="copiarRelatorio()" style="background: #10b981; color: white;">📋 Copiar Texto do Relatório</button>
@@ -497,11 +497,86 @@
 </div>
 
 <script>
+    // ==========================================
+    // CONFIGURAÇÃO DO SUPABASE
+    // ==========================================
+    const SUPABASE_URL = 'https://uggttooqhqammyeffuye.supabase.co/rest/v1/';
+    const SUPABASE_ANON_KEY = 'sb_publishable_5RnTfB_hGlFzGyaddn2LGw_TOBEPCLp';
+
+    const { createClient } = supabase;
+    const dbSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
     let tipoAtual = "";
     let selecionado = "";
     let indiceImagemAtual = null;
     let modoPinAtivo = false;
     let documentoEstudoAtivoIndex = null;
+
+    // Funções de Sincronização Assíncrona com Supabase (com fallback local)
+    async function salvarNaNuvem(tipoManual, chave, dadosObjeto) {
+        atualizarStatusSync('syncing');
+        // Mantém também no localStorage para performance imediata
+        localStorage.setItem(chave, JSON.stringify(dadosObjeto));
+
+        const { error } = await dbSupabase
+            .from('dados_cerebro')
+            .upsert({ 
+                tipo_manual: tipoManual, 
+                chave_dado: chave, 
+                conteudo: dadosObjeto,
+                atualizado_em: new Date()
+            }, { onConflict: ['tipo_manual', 'chave_dado'] });
+
+        if (error) {
+            console.error("Erro ao salvar no Supabase:", error);
+            atualizarStatusSync('error');
+        } else {
+            atualizarStatusSync('synced');
+        }
+    }
+
+    async function carregarDaNuvem(tipoManual, chave) {
+        atualizarStatusSync('syncing');
+        const { data, error } = await dbSupabase
+            .from('dados_cerebro')
+            .select('conteudo')
+            .eq('tipo_manual', tipoManual)
+            .eq('chave_dado', chave)
+            .single();
+
+        if (error || !data) {
+            // Se falhar na nuvem, busca do localStorage local se existir
+            let localFallback = localStorage.getItem(chave);
+            atualizarStatusSync('synced');
+            return localFallback ? JSON.parse(localFallback) : null;
+        }
+        
+        atualizarStatusSync('synced');
+        // Atualiza o cache local
+        localStorage.setItem(chave, JSON.stringify(data.conteudo));
+        return data.conteudo;
+    }
+
+    function atualizarStatusSync(estado) {
+        let badge = document.getElementById('sync-status');
+        if(!badge) return;
+        if(estado === 'synced') {
+            badge.className = "sync-status-badge synced";
+            badge.textContent = "☁️ Sincronizado com Supabase";
+        } else if(estado === 'syncing') {
+            badge.className = "sync-status-badge syncing";
+            badge.textContent = "🔄 Sincronizando...";
+        } else {
+            badge.className = "sync-status-badge";
+            badge.textContent = "⚠️ Erro de Sincronização";
+        }
+    }
+
+    // Sobrescrevendo o comportamento de armazenamento para usar a nuvem assíncrona
+    function obterDadosNuvemSync(chaveStorage) {
+        let salvo = localStorage.getItem(chaveStorage);
+        return salvo ? JSON.parse(salvo) : null;
+    }
 
     function alternarTema() {
         let body = document.body;
@@ -522,13 +597,14 @@
         let temaSalvo = localStorage.getItem('tema_preferido');
         if(temaSalvo === 'light') { document.body.classList.add('light-mode'); atualizarIconeTema(true); }
         else { atualizarIconeTema(false); }
+        atualizarStatusSync('synced');
     });
 
     const coresSugestoesPadrao = ["#38bdf8", "#facc15", "#ef4444", "#10b981", "#a855f7", "#ec4899", "#f97316", "#64748b"];
 
     const dadosPadroesGlobais = {
         freela: {
-            titulo: "Manual de Carreira Freelancer (Dinâmico)",
+            titulo: "Manual de Carreira Freelancer (Online)",
             descricao: "Prospecção, contratos, portfólio e metas.",
             storageKey: "manual_freela_estrutura",
             dados: {
@@ -583,7 +659,7 @@
         }
     };
 
-    function abrirManual(tipo) {
+    async function abrirManual(tipo) {
         tipoAtual = tipo;
         selecionado = "";
         let hub = document.getElementById('hub-view');
@@ -599,6 +675,15 @@
         if(descEl && dadosPadroesGlobais[tipo]) descEl.textContent = dadosPadroesGlobais[tipo].descricao;
         if(painelEl) painelEl.style.display = "none";
         
+        // Tenta carregar dados atualizados da nuvem antes de renderizar
+        let conf = dadosPadroesGlobais[tipoAtual];
+        if(conf) {
+            let dadosNuvem = await carregarDaNuvem(tipoAtual, conf.storageKey);
+            if(dadosNuvem) {
+                localStorage.setItem(conf.storageKey, JSON.stringify(dadosNuvem));
+            }
+        }
+
         renderizarSugestoesCores();
         reconstruirInterface();
     }
@@ -620,17 +705,18 @@
     function salvarDados(dados) {
         let conf = dadosPadroesGlobais[tipoAtual];
         if(!conf) return;
-        localStorage.setItem(conf.storageKey, JSON.stringify(dados));
+        salvarNaNuvem(tipoAtual, conf.storageKey, dados);
         reconstruirInterface();
     }
 
     function resetarDadosPadrao() {
         if(confirm("Deseja restaurar a estrutura padrão inicial?")) {
             let conf = dadosPadroesGlobais[tipoAtual];
-            if(conf) localStorage.removeItem(conf.storageKey);
+            if(conf) {
+                localStorage.removeItem(conf.storageKey);
+                salvarNaNuvem(tipoAtual, conf.storageKey, conf.dados);
+            }
             localStorage.removeItem(`ordem_blocos_${tipoAtual}`);
-            localStorage.removeItem(`blocos_visiveis_${tipoAtual}`);
-            localStorage.removeItem(`blocos_full_${tipoAtual}`);
             reconstruirInterface();
         }
     }
@@ -671,25 +757,10 @@
         event.dataTransfer.setData("text/plain", idBloco);
     }
 
-    function permitirArrasteBloco(event) {
-        event.preventDefault();
-        event.stopPropagation();
-    }
-
-    function permitirArrasteColuna(event) {
-        event.preventDefault();
-    }
-
-    function entrarColunaDrop(event) {
-        event.preventDefault();
-        let coluna = event.target.closest('.coluna-vertical');
-        if(coluna) coluna.classList.add('drag-over-column');
-    }
-
-    function sairColunaDrop(event) {
-        let coluna = event.target.closest('.coluna-vertical');
-        if(coluna) coluna.classList.remove('drag-over-column');
-    }
+    function permitirArrasteBloco(event) { event.preventDefault(); event.stopPropagation(); }
+    function permitirArrasteColuna(event) { event.preventDefault(); }
+    function entrarColunaDrop(event) { event.preventDefault(); let coluna = event.target.closest('.coluna-vertical'); if(coluna) coluna.classList.add('drag-over-column'); }
+    function sairColunaDrop(event) { let coluna = event.target.closest('.coluna-vertical'); if(coluna) coluna.classList.remove('drag-over-column'); }
 
     function aoSoltarNaColuna(event, idColunaDestino) {
         event.preventDefault();
@@ -715,12 +786,14 @@
             parentCol: b.parentNode.id,
             isFull: b.classList.contains('full-width-block')
         }));
-        localStorage.setItem(`ordem_blocos_${tipoAtual}_${selecionado}`, JSON.stringify(estadoBlocos));
+        let chaveOrdem = `ordem_blocos_${tipoAtual}_${selecionado}`;
+        salvarNaNuvem(tipoAtual, chaveOrdem, estadoBlocos);
     }
 
-    function carregarOrdemBlocosPainel() {
+    async function carregarOrdemBlocosPainel() {
         if(!tipoAtual || !selecionado) return;
-        let salvo = localStorage.getItem(`ordem_blocos_${tipoAtual}_${selecionado}`);
+        let chaveOrdem = `ordem_blocos_${tipoAtual}_${selecionado}`;
+        let salvo = await carregarDaNuvem(tipoAtual, chaveOrdem);
         let colunaEsq = document.getElementById('coluna-esquerda');
         let colunaDir = document.getElementById('coluna-direita');
 
@@ -734,7 +807,7 @@
         }
 
         try {
-            let estadoBlocos = JSON.parse(salvo);
+            let estadoBlocos = salvo;
             let idsPresentes = new Set();
             estadoBlocos.forEach(item => {
                 let bloco = document.getElementById(item.id);
@@ -772,14 +845,16 @@
         let novoTitulo = prompt("Digite o novo título para este módulo:", textoAtual);
         if(!novoTitulo) return;
         labelEl.textContent = novoTitulo + (labelEl.textContent.endsWith(':') ? ':' : '');
-        let titulosSalvos = JSON.parse(localStorage.getItem(`titulos_blocos_${tipoAtual}_${selecionado}`) || "{}");
+        let chaveTitulos = `titulos_blocos_${tipoAtual}_${selecionado}`;
+        let titulosSalvos = JSON.parse(localStorage.getItem(chaveTitulos) || "{}");
         titulosSalvos[idBloco] = labelEl.textContent;
-        localStorage.setItem(`titulos_blocos_${tipoAtual}_${selecionado}`, JSON.stringify(titulosSalvos));
+        salvarNaNuvem(tipoAtual, chaveTitulos, titulosSalvos);
     }
 
-    function carregarTitulosBlocosPainel() {
+    async function carregarTitulosBlocosPainel() {
         if(!tipoAtual || !selecionado) return;
-        let titulosSalvos = JSON.parse(localStorage.getItem(`titulos_blocos_${tipoAtual}_${selecionado}`) || "{}");
+        let chaveTitulos = `titulos_blocos_${tipoAtual}_${selecionado}`;
+        let titulosSalvos = await carregarDaNuvem(tipoAtual, chaveTitulos) || {};
         const mapeamentoLabels = {
             'bloco-geral': 'label-bloco-geral',
             'bloco-estudo': 'label-bloco-estudo',
@@ -794,7 +869,7 @@
         }
     }
 
-    function adicionarLinkArvore() {
+    async function adicionarLinkArvore() {
         if(!selecionado) return;
         let inputTitulo = document.getElementById('input-link-titulo');
         let inputUrl = document.getElementById('input-link-url');
@@ -803,18 +878,18 @@
         let url = inputUrl.value.trim();
         if(!titulo || !url) return alert("Preencha o título e a URL do link.");
         let chaveLinks = `links_item_${tipoAtual}_${selecionado}`;
-        let linksSalvos = JSON.parse(localStorage.getItem(chaveLinks) || "[]");
+        let linksSalvos = await carregarDaNuvem(tipoAtual, chaveLinks) || [];
         linksSalvos.push({ titulo, url, anotacao: "" });
-        localStorage.setItem(chaveLinks, JSON.stringify(linksSalvos));
+        await salvarNaNuvem(tipoAtual, chaveLinks, linksSalvos);
         inputTitulo.value = ""; inputUrl.value = "";
         carregarArvoreLinks();
     }
 
-    function carregarArvoreLinks() {
+    async function carregarArvoreLinks() {
         let container = document.getElementById('container-arvore-links');
         if(!container || !selecionado) return;
         let chaveLinks = `links_item_${tipoAtual}_${selecionado}`;
-        let linksSalvos = JSON.parse(localStorage.getItem(chaveLinks) || "[]");
+        let linksSalvos = await carregarDaNuvem(tipoAtual, chaveLinks) || [];
         if(linksSalvos.length === 0) {
             container.innerHTML = `<span style="font-size:0.75rem; color:var(--muted-text);">Nenhum link salvo.</span>`;
             return;
@@ -835,22 +910,22 @@
         container.innerHTML = html;
     }
 
-    function salvarAnotacaoLink(index, texto) {
+    async function salvarAnotacaoLink(index, texto) {
         if(!selecionado) return;
         let chaveLinks = `links_item_${tipoAtual}_${selecionado}`;
-        let linksSalvos = JSON.parse(localStorage.getItem(chaveLinks) || "[]");
+        let linksSalvos = await carregarDaNuvem(tipoAtual, chaveLinks) || [];
         if(linksSalvos[index]) {
             linksSalvos[index].anotacao = texto;
-            localStorage.setItem(chaveLinks, JSON.stringify(linksSalvos));
+            await salvarNaNuvem(tipoAtual, chaveLinks, linksSalvos);
         }
     }
 
-    function removerLinkArvore(index) {
+    async function removerLinkArvore(index) {
         if(!selecionado) return;
         let chaveLinks = `links_item_${tipoAtual}_${selecionado}`;
-        let linksSalvos = JSON.parse(localStorage.getItem(chaveLinks) || "[]");
+        let linksSalvos = await carregarDaNuvem(tipoAtual, chaveLinks) || [];
         linksSalvos.splice(index, 1);
-        localStorage.setItem(chaveLinks, JSON.stringify(linksSalvos));
+        await salvarNaNuvem(tipoAtual, chaveLinks, linksSalvos);
         carregarArvoreLinks();
     }
 
@@ -900,12 +975,12 @@
         let file = event.target.files[0];
         if(!file || !selecionado) return;
         let reader = new FileReader();
-        reader.onload = function(e) {
+        reader.onload = async function(e) {
             let conteudoTexto = e.target.result;
             let chaveDocs = `study_docs_${tipoAtual}_${selecionado}`;
-            let docsSalvos = JSON.parse(localStorage.getItem(chaveDocs) || "[]");
+            let docsSalvos = await carregarDaNuvem(tipoAtual, chaveDocs) || [];
             docsSalvos.push({ nome: file.name, conteudo: conteudoTexto, highlights: [] });
-            localStorage.setItem(chaveDocs, JSON.stringify(docsSalvos));
+            await salvarNaNuvem(tipoAtual, chaveDocs, docsSalvos);
             carregarListaDocumentosEstudo();
             alert("Material de estudo anexado com sucesso!");
         };
@@ -913,12 +988,12 @@
         event.target.value = "";
     }
 
-    function carregarListaDocumentosEstudo() {
+    async function carregarListaDocumentosEstudo() {
         let container = document.getElementById('lista-documentos-estudo');
         fecharLeitorAtivo();
         if(!selecionado) { container.innerHTML = ""; return; }
         let chaveDocs = `study_docs_${tipoAtual}_${selecionado}`;
-        let docsSalvos = JSON.parse(localStorage.getItem(chaveDocs) || "[]");
+        let docsSalvos = await carregarDaNuvem(tipoAtual, chaveDocs) || [];
         if(docsSalvos.length === 0) {
             container.innerHTML = `<span style="font-size:0.75rem; color:var(--muted-text);">Nenhum material de estudo enviado.</span>`;
             return;
@@ -938,19 +1013,19 @@
         container.innerHTML = html;
     }
 
-    function removerDocumentoEstudo(index) {
+    async function removerDocumentoEstudo(index) {
         if(!confirm("Deseja realmente excluir este material de estudo?")) return;
         let chaveDocs = `study_docs_${tipoAtual}_${selecionado}`;
-        let docsSalvos = JSON.parse(localStorage.getItem(chaveDocs) || "[]");
+        let docsSalvos = await carregarDaNuvem(tipoAtual, chaveDocs) || [];
         docsSalvos.splice(index, 1);
-        localStorage.setItem(chaveDocs, JSON.stringify(docsSalvos));
+        await salvarNaNuvem(tipoAtual, chaveDocs, docsSalvos);
         carregarListaDocumentosEstudo();
     }
 
-    function abrirLeitorAtivo(index) {
+    async function abrirLeitorAtivo(index) {
         documentoEstudoAtivoIndex = index;
         let chaveDocs = `study_docs_${tipoAtual}_${selecionado}`;
-        let docsSalvos = JSON.parse(localStorage.getItem(chaveDocs) || "[]");
+        let docsSalvos = await carregarDaNuvem(tipoAtual, chaveDocs) || [];
         let doc = docsSalvos[index];
         if(!doc) return;
         document.getElementById('reader-title-label').textContent = `Estudando: ${doc.nome}`;
@@ -969,38 +1044,35 @@
         if(highlightsList) highlightsList.innerHTML = "";
     }
 
-    function salvarConteudoLeitor() {
+    async function salvarConteudoLeitor() {
         if(documentoEstudoAtivoIndex === null) return;
         let chaveDocs = `study_docs_${tipoAtual}_${selecionado}`;
-        let docsSalvos = JSON.parse(localStorage.getItem(chaveDocs) || "[]");
+        let docsSalvos = await carregarDaNuvem(tipoAtual, chaveDocs) || [];
         docsSalvos[documentoEstudoAtivoIndex].conteudo = document.getElementById('reader-content-editable').innerHTML;
-        localStorage.setItem(chaveDocs, JSON.stringify(docsSalvos));
+        await salvarNaNuvem(tipoAtual, chaveDocs, docsSalvos);
         alert("Alterações salvas!");
     }
 
-    function salvarConteudoLeitorAuto() {
+    async function salvarConteudoLeitorAuto() {
         if(documentoEstudoAtivoIndex === null) return;
         let chaveDocs = `study_docs_${tipoAtual}_${selecionado}`;
-        let docsSalvos = JSON.parse(localStorage.getItem(chaveDocs) || "[]");
+        let docsSalvos = await carregarDaNuvem(tipoAtual, chaveDocs) || [];
         let doc = docsSalvos[documentoEstudoAtivoIndex];
         if(!doc) return;
         doc.conteudo = document.getElementById('reader-content-editable').innerHTML;
-        localStorage.setItem(chaveDocs, JSON.stringify(docsSalvos));
+        await salvarNaNuvem(tipoAtual, chaveDocs, docsSalvos);
     }
 
     function baixarDocumentoEditado() {
         if(documentoEstudoAtivoIndex === null) return;
-        let chaveDocs = `study_docs_${tipoAtual}_${selecionado}`;
-        let docsSalvos = JSON.parse(localStorage.getItem(chaveDocs) || "[]");
-        let doc = docsSalvos[documentoEstudoAtivoIndex];
         let blob = new Blob([document.getElementById('reader-content-editable').innerText], {type: "text/plain;charset=utf-8"});
         let a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `editado_${doc.nome}`;
+        a.download = `editado_documento.txt`;
         a.click();
     }
 
-    function destacarTextoSelecionado() {
+    async function destacarTextoSelecionado() {
         let selecao = window.getSelection();
         if(!selecao.rangeCount || selecao.isCollapsed) return alert("Selecione um trecho de texto no leitor para destacar.");
         let range = selecao.getRangeAt(0);
@@ -1011,12 +1083,12 @@
         let notaTexto = prompt("Adicione uma anotação pontual para este destaque:", "Comentário...");
         if(notaTexto === null) notaTexto = "";
         let chaveDocs = `study_docs_${tipoAtual}_${selecionado}`;
-        let docsSalvos = JSON.parse(localStorage.getItem(chaveDocs) || "[]");
+        let docsSalvos = await carregarDaNuvem(tipoAtual, chaveDocs) || [];
         let doc = docsSalvos[documentoEstudoAtivoIndex];
         if(!doc.highlights) doc.highlights = [];
         doc.highlights.push({ trecho: span.textContent, nota: notaTexto });
         doc.conteudo = document.getElementById('reader-content-editable').innerHTML;
-        localStorage.setItem(chaveDocs, JSON.stringify(docsSalvos));
+        await salvarNaNuvem(tipoAtual, chaveDocs, docsSalvos);
         renderizarListaHighlights(doc.highlights);
         selecao.removeAllRanges();
     }
@@ -1041,25 +1113,25 @@
         container.innerHTML = html;
     }
 
-    function atualizarNotaHighlight(hIndex, novaNota) {
+    async function atualizarNotaHighlight(hIndex, novaNota) {
         if(documentoEstudoAtivoIndex === null) return;
         let chaveDocs = `study_docs_${tipoAtual}_${selecionado}`;
-        let docsSalvos = JSON.parse(localStorage.getItem(chaveDocs) || "[]");
+        let docsSalvos = await carregarDaNuvem(tipoAtual, chaveDocs) || [];
         let doc = docsSalvos[documentoEstudoAtivoIndex];
         if(doc && doc.highlights && doc.highlights[hIndex]) {
             doc.highlights[hIndex].nota = novaNota;
-            localStorage.setItem(chaveDocs, JSON.stringify(docsSalvos));
+            await salvarNaNuvem(tipoAtual, chaveDocs, docsSalvos);
         }
     }
 
-    function removerHighlight(hIndex) {
+    async function removerHighlight(hIndex) {
         if(documentoEstudoAtivoIndex === null) return;
         let chaveDocs = `study_docs_${tipoAtual}_${selecionado}`;
-        let docsSalvos = JSON.parse(localStorage.getItem(chaveDocs) || "[]");
+        let docsSalvos = await carregarDaNuvem(tipoAtual, chaveDocs) || [];
         let doc = docsSalvos[documentoEstudoAtivoIndex];
         if(doc && doc.highlights) {
             doc.highlights.splice(hIndex, 1);
-            localStorage.setItem(chaveDocs, JSON.stringify(docsSalvos));
+            await salvarNaNuvem(tipoAtual, chaveDocs, docsSalvos);
             renderizarListaHighlights(doc.highlights);
         }
     }
@@ -1079,8 +1151,7 @@
                     let dataPrazo = localStorage.getItem(`data_local_${tipoAtual}_` + item) || "Não definida";
                     md += `#### 🔹 Atividade / Item: ${item}\n`;
                     md += `- **Status**: ${concluido ? '✅ Concluído' : '⏳ Pendente'}\n`;
-                    md += `- **Prazo**: ${dataPrazo}\n`;
-                    md += `\n---\n\n`;
+                    md += `- **Prazo**: ${dataPrazo}\n\n`;
                 });
             }
         }
@@ -1121,7 +1192,6 @@
         let dataVal = document.getElementById('input-calendario-diario').value;
         if(!dataVal) return alert("Selecione uma data no diário de bordo primeiro.");
         let chaveImagens = `images_diario_${tipoAtual}_${selecionado}_${dataVal}`;
-        let imagensSalvas = JSON.parse(localStorage.getItem(chaveImagens) || "[]");
         let filesToProcess = [];
         for (let i = 0; i < items.length; i++) {
             if (items[i].kind === 'file' && items[i].type.startsWith('image/')) {
@@ -1131,12 +1201,13 @@
         }
         if(filesToProcess.length === 0) return;
         let processados = 0;
-        filesToProcess.forEach(blob => {
-            comprimirEConverterImagem(blob, function(base64Otimizado) {
+        filesToProcess.forEach(async blob => {
+            comprimirEConverterImagem(blob, async function(base64Otimizado) {
+                let imagensSalvas = await carregarDaNuvem(tipoAtual, chaveImagens) || [];
                 imagensSalvas.push({ src: base64Otimizado, comentario: "", pins: [] });
                 processados++;
                 if(processados === filesToProcess.length) {
-                    localStorage.setItem(chaveImagens, JSON.stringify(imagensSalvas));
+                    await salvarNaNuvem(tipoAtual, chaveImagens, imagensSalvas);
                     carregarGaleriaImagensData(dataVal);
                 }
             });
@@ -1149,16 +1220,16 @@
         let dataVal = document.getElementById('input-calendario-diario').value;
         if(!dataVal) return alert("Selecione uma data no diário de bordo primeiro.");
         let chaveImagens = `images_diario_${tipoAtual}_${selecionado}_${dataVal}`;
-        let imagensSalvas = JSON.parse(localStorage.getItem(chaveImagens) || "[]");
         let processados = 0;
         for(let i=0; i<files.length; i++) {
             let file = files[i];
             if(!file.type.startsWith('image/')) continue;
-            comprimirEConverterImagem(file, function(base64Otimizado) {
+            comprimirEConverterImagem(file, async function(base64Otimizado) {
+                let imagensSalvas = await carregarDaNuvem(tipoAtual, chaveImagens) || [];
                 imagensSalvas.push({ src: base64Otimizado, comentario: "", pins: [] });
                 processados++;
                 if(processados === files.length || i === files.length - 1) {
-                    localStorage.setItem(chaveImagens, JSON.stringify(imagensSalvas));
+                    await salvarNaNuvem(tipoAtual, chaveImagens, imagensSalvas);
                     carregarGaleriaImagensData(dataVal);
                 }
             });
@@ -1166,11 +1237,11 @@
         event.target.value = "";
     }
 
-    function carregarGaleriaImagensData(dataStr) {
+    async function carregarGaleriaImagensData(dataStr) {
         let container = document.getElementById('galeria-miniaturas');
         if(!selecionado || !dataStr) { container.innerHTML = ""; return; }
         let chaveImagens = `images_diario_${tipoAtual}_${selecionado}_${dataStr}`;
-        let imagensSalvas = JSON.parse(localStorage.getItem(chaveImagens) || "[]");
+        let imagensSalvas = await carregarDaNuvem(tipoAtual, chaveImagens) || [];
         if(imagensSalvas.length === 0) {
             container.innerHTML = `<span style="font-size:0.75rem; color:var(--muted-text);">Nenhuma imagem anexada.</span>`;
             return;
@@ -1192,18 +1263,18 @@
         container.innerHTML = html;
     }
 
-    function removerImagemDoDiarioData(index, dataStr) {
+    async function removerImagemDoDiarioData(index, dataStr) {
         let chaveImagens = `images_diario_${tipoAtual}_${selecionado}_${dataStr}`;
-        let imagensSalvas = JSON.parse(localStorage.getItem(chaveImagens) || "[]");
+        let imagensSalvas = await carregarDaNuvem(tipoAtual, chaveImagens) || [];
         imagensSalvas.splice(index, 1);
-        localStorage.setItem(chaveImagens, JSON.stringify(imagensSalvas));
+        await salvarNaNuvem(tipoAtual, chaveImagens, imagensSalvas);
         carregarGaleriaImagensData(dataStr);
     }
 
-    function abrirModalImagem(index) {
+    async function abrirModalImagem(index) {
         let dataVal = document.getElementById('input-calendario-diario').value;
         let chaveImagens = `images_diario_${tipoAtual}_${selecionado}_${dataVal}`;
-        let imagensSalvas = JSON.parse(localStorage.getItem(chaveImagens) || "[]");
+        let imagensSalvas = await carregarDaNuvem(tipoAtual, chaveImagens) || [];
         let imgObj = imagensSalvas[index];
         indiceImagemAtual = index;
         modoPinAtivo = false;
@@ -1216,18 +1287,18 @@
         renderizarPinsNaImagem();
     }
 
-    function salvarComentarioImagemAtual() {
+    async function salvarComentarioImagemAtual() {
         if(indiceImagemAtual === null) return;
         let dataVal = document.getElementById('input-calendario-diario').value;
         let chaveImagens = `images_diario_${tipoAtual}_${selecionado}_${dataVal}`;
-        let imagensSalvas = JSON.parse(localStorage.getItem(chaveImagens) || "[]");
+        let imagensSalvas = await carregarDaNuvem(tipoAtual, chaveImagens) || [];
         let novoComentario = document.getElementById('textarea-comentario-imagem').value;
         if(typeof imagensSalvas[indiceImagemAtual] === 'string') {
             imagensSalvas[indiceImagemAtual] = { src: imagensSalvas[indiceImagemAtual], comentario: novoComentario, pins: [] };
         } else {
             imagensSalvas[indiceImagemAtual].comentario = novoComentario;
         }
-        localStorage.setItem(chaveImagens, JSON.stringify(imagensSalvas));
+        await salvarNaNuvem(tipoAtual, chaveImagens, imagensSalvas);
     }
 
     function alternarModoPin() { modoPinAtivo = !modoPinAtivo; atualizarBotaoPinUI(); }
@@ -1239,7 +1310,7 @@
         }
     }
 
-    function clicarNaImagemParaPin(event) {
+    async function clicarNaImagemParaPin(event) {
         if(!modoPinAtivo || indiceImagemAtual === null) return;
         let imgEl = document.getElementById('imagem-full-src');
         let rect = imgEl.getBoundingClientRect();
@@ -1248,24 +1319,24 @@
         if (x < 0 || x > 100 || y < 0 || y > 100) return;
         let dataVal = document.getElementById('input-calendario-diario').value;
         let chaveImagens = `images_diario_${tipoAtual}_${selecionado}_${dataVal}`;
-        let imagensSalvas = JSON.parse(localStorage.getItem(chaveImagens) || "[]");
+        let imagensSalvas = await carregarDaNuvem(tipoAtual, chaveImagens) || [];
         let imgObj = imagensSalvas[indiceImagemAtual];
         if(typeof imgObj === 'string') { imgObj = { src: imgObj, comentario: "", pins: [] }; imagensSalvas[indiceImagemAtual] = imgObj; }
         if(!imgObj.pins) imgObj.pins = [];
         imgObj.pins.push({ x, y, texto: "" });
-        localStorage.setItem(chaveImagens, JSON.stringify(imagensSalvas));
+        await salvarNaNuvem(tipoAtual, chaveImagens, imagensSalvas);
         renderizarPinsNaImagem();
         carregarGaleriaImagensData(dataVal);
     }
 
-    function renderizarPinsNaImagem() {
+    async function renderizarPinsNaImagem() {
         let layer = document.getElementById('pins-overlay-layer');
         if(!layer) return;
         layer.innerHTML = "";
         if(indiceImagemAtual === null) return;
         let dataVal = document.getElementById('input-calendario-diario').value;
         let chaveImagens = `images_diario_${tipoAtual}_${selecionado}_${dataVal}`;
-        let imagensSalvas = JSON.parse(localStorage.getItem(chaveImagens) || "[]");
+        let imagensSalvas = await carregarDaNuvem(tipoAtual, chaveImagens) || [];
         let imgObj = imagensSalvas[indiceImagemAtual];
         if(!imgObj || typeof imgObj === 'string' || !imgObj.pins) return;
         imgObj.pins.forEach((pin, pIndex) => {
@@ -1292,25 +1363,25 @@
         });
     }
 
-    function atualizarTextoPin(pIndex, novoTexto) {
+    async function atualizarTextoPin(pIndex, novoTexto) {
         let dataVal = document.getElementById('input-calendario-diario').value;
         let chaveImagens = `images_diario_${tipoAtual}_${selecionado}_${dataVal}`;
-        let imagensSalvas = JSON.parse(localStorage.getItem(chaveImagens) || "[]");
+        let imagensSalvas = await carregarDaNuvem(tipoAtual, chaveImagens) || [];
         let imgObj = imagensSalvas[indiceImagemAtual];
         if(imgObj && imgObj.pins && imgObj.pins[pIndex]) {
             imgObj.pins[pIndex].texto = novoTexto;
-            localStorage.setItem(chaveImagens, JSON.stringify(imagensSalvas));
+            await salvarNaNuvem(tipoAtual, chaveImagens, imagensSalvas);
         }
     }
 
-    function deletarPin(pIndex) {
+    async function deletarPin(pIndex) {
         let dataVal = document.getElementById('input-calendario-diario').value;
         let chaveImagens = `images_diario_${tipoAtual}_${selecionado}_${dataVal}`;
-        let imagensSalvas = JSON.parse(localStorage.getItem(chaveImagens) || "[]");
+        let imagensSalvas = await carregarDaNuvem(tipoAtual, chaveImagens) || [];
         let imgObj = imagensSalvas[indiceImagemAtual];
         if(imgObj && imgObj.pins) {
             imgObj.pins.splice(pIndex, 1);
-            localStorage.setItem(chaveImagens, JSON.stringify(imagensSalvas));
+            await salvarNaNuvem(tipoAtual, chaveImagens, imagensSalvas);
             renderizarPinsNaImagem();
             carregarGaleriaImagensData(dataVal);
         }
@@ -1328,16 +1399,16 @@
         if (!files || files.length === 0) return;
         if (!selecionado) { alert("Selecione um item primeiro."); event.target.value = ""; return; }
         let chaveStorage = `files_item_${tipoAtual}_${selecionado}`;
-        let arquivosSalvos = JSON.parse(localStorage.getItem(chaveStorage) || "[]");
         let processados = 0;
         for (let i = 0; i < files.length; i++) {
             let file = files[i];
             let reader = new FileReader();
-            reader.onload = function(e) {
+            reader.onload = async function(e) {
+                let arquivosSalvos = await carregarDaNuvem(tipoAtual, chaveStorage) || [];
                 arquivosSalvos.push({ nome: file.name, dados: e.target.result });
                 processados++;
                 if (processados === files.length) {
-                    localStorage.setItem(chaveStorage, JSON.stringify(arquivosSalvos));
+                    await salvarNaNuvem(tipoAtual, chaveStorage, arquivosSalvos);
                     atualizarListaArquivos();
                     alert("Arquivo(s) anexado(s) com sucesso!");
                 }
@@ -1347,10 +1418,11 @@
         event.target.value = "";
     }
 
-    function atualizarListaArquivos() {
+    async function atualizarListaArquivos() {
         let containerArquivos = document.getElementById('lista-arquivos');
         if(!containerArquivos || !selecionado) return;
-        let arquivosSalvos = JSON.parse(localStorage.getItem(`files_item_${tipoAtual}_${selecionado}`) || "[]");
+        let chaveStorage = `files_item_${tipoAtual}_${selecionado}`;
+        let arquivosSalvos = await carregarDaNuvem(tipoAtual, chaveStorage) || [];
         if (arquivosSalvos.length === 0) { containerArquivos.innerHTML = "Nenhum arquivo anexado."; return; }
         let html = "<strong>Arquivos:</strong><ul>";
         arquivosSalvos.forEach((f, index) => {
@@ -1360,18 +1432,19 @@
         containerArquivos.innerHTML = html;
     }
 
-    function removerArquivoItem(index) {
+    async function removerArquivoItem(index) {
         let chaveStorage = `files_item_${tipoAtual}_${selecionado}`;
-        let arquivosSalvos = JSON.parse(localStorage.getItem(chaveStorage) || "[]");
+        let arquivosSalvos = await carregarDaNuvem(tipoAtual, chaveStorage) || [];
         arquivosSalvos.splice(index, 1);
-        localStorage.setItem(chaveStorage, JSON.stringify(arquivosSalvos));
+        await salvarNaNuvem(tipoAtual, chaveStorage, arquivosSalvos);
         atualizarListaArquivos();
     }
 
-    function limparCacheArquivosItem() {
+    async function limparCacheArquivosItem() {
         if(!selecionado) return alert("Selecione um item primeiro.");
         if(confirm("Deseja limpar todos os arquivos anexados deste item?")) {
-            localStorage.removeItem(`files_item_${tipoAtual}_${selecionado}`);
+            let chaveStorage = `files_item_${tipoAtual}_${selecionado}`;
+            await salvarNaNuvem(tipoAtual, chaveStorage, []);
             atualizarListaArquivos();
             alert("Cache de anexos limpo!");
         }
@@ -1445,7 +1518,8 @@
         let tags = obterTagsGlobais();
         if(tags.some(t => t.nome.toLowerCase() === nome.toLowerCase())) return alert("Tag já existe.");
         tags.push({ nome, cor });
-        localStorage.setItem(`tags_colecao_${tipoAtual}`, JSON.stringify(tags));
+        let chaveTags = `tags_colecao_${tipoAtual}`;
+        salvarNaNuvem(tipoAtual, chaveTags, tags);
         document.getElementById('input-nova-tag-nome').value = "";
         renderizarListaTagsGlobais();
         reconstruirInterface();
@@ -1454,7 +1528,8 @@
     function deletarTagGlobal(nomeTag) {
         if(!confirm(`Excluir tag "${nomeTag}"?`)) return;
         let tags = obterTagsGlobais().filter(t => t.nome !== nomeTag);
-        localStorage.setItem(`tags_colecao_${tipoAtual}`, JSON.stringify(tags));
+        let chaveTags = `tags_colecao_${tipoAtual}`;
+        salvarNaNuvem(tipoAtual, chaveTags, tags);
         renderizarListaTagsGlobais();
         reconstruirInterface();
     }
@@ -1480,16 +1555,18 @@
     function adicionarTagAoItem(item, nomeTag) {
         let tagObj = obterTagsGlobais().find(t => t.nome === nomeTag);
         if(!tagObj) return;
-        let tagsItem = JSON.parse(localStorage.getItem(`tags_item_${tipoAtual}_${item}`) || "[]");
+        let chaveItemTags = `tags_item_${tipoAtual}_${item}`;
+        let tagsItem = JSON.parse(localStorage.getItem(chaveItemTags) || "[]");
         if(tagsItem.some(t => t.nome === nomeTag)) return;
         tagsItem.push(tagObj);
-        localStorage.setItem(`tags_item_${tipoAtual}_${item}`, JSON.stringify(tagsItem));
+        salvarNaNuvem(tipoAtual, chaveItemTags, tagsItem);
         reconstruirInterface();
     }
 
     function removerTagDoItem(item, nomeTag) {
-        let tagsItem = JSON.parse(localStorage.getItem(`tags_item_${tipoAtual}_${item}`) || "[]").filter(t => t.nome !== nomeTag);
-        localStorage.setItem(`tags_item_${tipoAtual}_${item}`, JSON.stringify(tagsItem));
+        let chaveItemTags = `tags_item_${tipoAtual}_${item}`;
+        let tagsItem = JSON.parse(localStorage.getItem(chaveItemTags) || "[]").filter(t => t.nome !== nomeTag);
+        salvarNaNuvem(tipoAtual, chaveItemTags, tagsItem);
         reconstruirInterface();
     }
 
@@ -1506,15 +1583,14 @@
 
     function alternarConclusaoItem(item, checkboxEl) {
         let estaConcluido = checkboxEl.checked;
-        localStorage.setItem(`item_concluido_${tipoAtual}_` + item, estaConcluido);
+        let chaveStatus = `item_concluido_${tipoAtual}_` + item;
+        salvarNaNuvem(tipoAtual, chaveStatus, estaConcluido);
         
         let btn = document.getElementById(`btn_color_${tipoAtual}_` + item);
         if (btn) {
             if (estaConcluido) {
-                // Se marcado: desconsiderar o prazo e retornar ao estado neutro (btn-blue)
                 btn.className = "btn-blue";
             } else {
-                // Se desmarcado: voltar a refletir o prazo específico do calendário
                 btn.className = calcularCorBotao(item);
             }
         }
@@ -1565,7 +1641,6 @@
                     left.appendChild(chkConcluido);
 
                     let btn = document.createElement('button'); btn.textContent = item;
-                    // Aplica a cor inicial correta com base no checkbox
                     btn.className = estaConcluido ? "btn-blue" : calcularCorBotao(item); 
                     btn.id = `btn_color_${tipoAtual}_` + item;
                     btn.onclick = () => selecionar(item);
@@ -1626,11 +1701,15 @@
         atualizarFluxograma(dados);
     }
 
-    function selecionar(nome) {
+    async function selecionar(nome) {
         selecionado = nome;
         document.getElementById('conteudo-painel').style.display = "block";
         document.getElementById('titulo-comentario').textContent = "Item: " + nome;
-        document.getElementById('texto-area').value = localStorage.getItem(`txt_${tipoAtual}_` + nome) || "";
+        
+        let chaveTxt = `txt_${tipoAtual}_` + nome;
+        let textoSalvo = await carregarDaNuvem(tipoAtual, chaveTxt) || "";
+        document.getElementById('texto-area').value = textoSalvo;
+
         const hojeIso = new Date().toISOString().split('T')[0];
         document.getElementById('input-calendario-diario').value = hojeIso;
         carregarDiarioBordo(hojeIso);
@@ -1648,16 +1727,17 @@
         if(dataVal) carregarDiarioBordo(dataVal);
     }
 
-    function carregarDiarioBordo(dataStr) {
+    async function carregarDiarioBordo(dataStr) {
         if(!selecionado) return;
         const chaveDiario = `diario_${tipoAtual}_${selecionado}_${dataStr}`;
-        document.getElementById('textarea-diario').value = localStorage.getItem(chaveDiario) || "";
+        let textoDiario = await carregarDaNuvem(tipoAtual, chaveDiario) || "";
+        document.getElementById('textarea-diario').value = textoDiario;
         document.getElementById('label-data-selecionada').textContent = `Data: ${dataStr.split('-').reverse().join('/')}`;
         carregarGaleriaImagensData(dataStr);
         atualizarChipsDatasDiario();
     }
 
-    function atualizarChipsDatasDiario() {
+    async function atualizarChipsDatasDiario() {
         let containerChips = document.getElementById('container-datas-chips');
         if(!containerChips || !selecionado) return;
         let datasComNotas = [];
@@ -1685,13 +1765,19 @@
     }
 
     function salvarAutomaticoGeral() {
-        if(selecionado) localStorage.setItem(`txt_${tipoAtual}_` + selecionado, document.getElementById('texto-area').value);
+        if(selecionado) {
+            let chaveTxt = `txt_${tipoAtual}_` + selecionado;
+            salvarNaNuvem(tipoAtual, chaveTxt, document.getElementById('texto-area').value);
+        }
     }
 
     function salvarAutomaticoDiario() {
         if(!selecionado) return;
         let dataVal = document.getElementById('input-calendario-diario').value;
-        if(dataVal) localStorage.setItem(`diario_${tipoAtual}_${selecionado}_${dataVal}`, document.getElementById('textarea-diario').value);
+        if(dataVal) {
+            let chaveDiario = `diario_${tipoAtual}_${selecionado}_${dataVal}`;
+            salvarNaNuvem(tipoAtual, chaveDiario, document.getElementById('textarea-diario').value);
+        }
         atualizarChipsDatasDiario();
     }
 
@@ -1703,7 +1789,8 @@
     function salvarData(item) {
         let val = document.getElementById(`input_date_${tipoAtual}_` + item).value;
         if(!val) return alert("Selecione data.");
-        localStorage.setItem(`data_local_${tipoAtual}_` + item, val);
+        let chaveData = `data_local_${tipoAtual}_` + item;
+        salvarNaNuvem(tipoAtual, chaveData, val);
         reconstruirInterface(); 
         alert("Salvo!");
     }
@@ -1757,11 +1844,12 @@
         if(ta) autoAjustarTextarea(ta);
     }
 
-    function carregarChecklist() {
+    async function carregarChecklist() {
         let c = document.getElementById('checklist-container');
         if(!c || !selecionado) return;
         c.innerHTML = "";
-        let salvo = JSON.parse(localStorage.getItem(`chk_${tipoAtual}_` + selecionado) || "[]");
+        let chaveChk = `chk_${tipoAtual}_` + selecionado;
+        let salvo = await carregarDaNuvem(tipoAtual, chaveChk) || [];
         if(salvo.length === 0) adicionarItemChecklist();
         else salvo.forEach(item => adicionarItemChecklist(item.texto, item.marcado));
     }
@@ -1773,13 +1861,14 @@
             let txt = el.querySelector('textarea');
             if(chk && txt) arr.push({marcado: chk.checked, texto: txt.value});
         });
-        localStorage.setItem(`chk_${tipoAtual}_` + selecionado, JSON.stringify(arr));
+        let chaveChk = `chk_${tipoAtual}_` + selecionado;
+        salvarNaNuvem(tipoAtual, chaveChk, arr);
     }
 
     function salvar() { 
         if(!selecionado) return; 
         salvarAutomaticoGeral(); salvarAutomaticoDiario(); salvarCk(); salvarOrdemBlocosPainel();
-        alert("Salvo com sucesso!"); 
+        alert("Salvo com sucesso na nuvem!"); 
     }
 
     function exportarTxt() {
@@ -1790,7 +1879,7 @@
 
     function exportarPdf() {
         if(!selecionado) return alert("Selecione um item primeiro.");
-        let notasGerais = localStorage.getItem(`txt_${tipoAtual}_` + selecionado) || "Nenhuma anotação geral.";
+        let notasGerais = document.getElementById('texto-area').value || "Nenhuma anotação geral.";
         let janelaImpressao = window.open('', '_blank');
         janelaImpressao.document.write(`<html><head><title>${selecionado}</title></head><body><h1>${selecionado}</h1><div>${notasGerais}</div><script>window.onload = () => window.print();<\/script></body></html>`);
         janelaImpressao.document.close();
