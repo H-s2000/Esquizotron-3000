@@ -235,6 +235,7 @@
         <div class="global-actions">
             <button class="btn-action" onclick="adicionarCategoriaPrincipal()">+ Adicionar Nova Categoria Principal</button>
             <button class="btn-action" onclick="togglePainelTags()" style="background:#0284c7; color:white;">🏷️ Gerenciar Coleção de Tags</button>
+            <button class="btn-action" onclick="migrarLocalStorageParaSupabase()" style="background:#f59e0b; color:white;" title="Migrar dados salvos no navegador para o Supabase">🚀 Migrar LocalStorage p/ Supabase</button>
             <button class="btn-action" onclick="gerarMarkdownBackup()" style="background:#10b981; color:white;">💾 Baixar Backup Geral Completo em .md</button>
             <button class="btn-action" onclick="resetarDadosPadrao()" style="background:#475569; color:white;">Restaurar Padrão Inicial</button>
         </div>
@@ -500,8 +501,8 @@
     // ==========================================
     // CONFIGURAÇÃO DO SUPABASE
     // ==========================================
-    const SUPABASE_URL = 'https://uggttooqhqammyeffuye.supabase.co/rest/v1/dados_cerebro';
-    const SUPABASE_ANON_KEY = 'sb_publishable_5RnTfB_hGlFzGyaddn2LGw_TOBEPCLp';
+    const SUPABASE_URL = 'SUA_SUPABASE_URL_AQUI';
+    const SUPABASE_ANON_KEY = 'SUA_SUPABASE_ANON_KEY_AQUI';
 
     const { createClient } = supabase;
     const dbSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -512,10 +513,9 @@
     let modoPinAtivo = false;
     let documentoEstudoAtivoIndex = null;
 
-    // Funções de Sincronização Assíncrona com Supabase (com fallback local)
+    // Funções de Sincronização Assíncrona com Supabase (com fallback e prioridade para dados locais)
     async function salvarNaNuvem(tipoManual, chave, dadosObjeto) {
         atualizarStatusSync('syncing');
-        // Mantém também no localStorage para performance imediata
         localStorage.setItem(chave, JSON.stringify(dadosObjeto));
 
         const { error } = await dbSupabase
@@ -537,6 +537,12 @@
 
     async function carregarDaNuvem(tipoManual, chave) {
         atualizarStatusSync('syncing');
+        
+        // 1. PRIMEIRO verifica se existe dado salvo no localStorage local do navegador
+        let localFallback = localStorage.getItem(chave);
+        let dadosLocais = localFallback ? JSON.parse(localFallback) : null;
+
+        // 2. Tenta buscar da nuvem para ver se há versão sincronizada
         const { data, error } = await dbSupabase
             .from('dados_cerebro')
             .select('conteudo')
@@ -544,17 +550,67 @@
             .eq('chave_dado', chave)
             .single();
 
-        if (error || !data) {
-            // Se falhar na nuvem, busca do localStorage local se existir
-            let localFallback = localStorage.getItem(chave);
+        if (error || !data || !data.conteudo) {
+            // Se a nuvem estiver vazia ou offline, usa imediatamente o dado local do navegador
             atualizarStatusSync('synced');
-            return localFallback ? JSON.parse(localFallback) : null;
+            return dadosLocais;
         }
         
         atualizarStatusSync('synced');
-        // Atualiza o cache local
+        // Se a nuvem tem dados, atualiza o cache local e retorna
         localStorage.setItem(chave, JSON.stringify(data.conteudo));
         return data.conteudo;
+    }
+
+    // Função integrada de migração do LocalStorage para o Supabase
+    async function migrarLocalStorageParaSupabase() {
+        if (!confirm("Deseja migrar todos os dados locais salvos no navegador para o Supabase?")) return;
+        console.log("🚀 Iniciando migração do localStorage para o Supabase...");
+        atualizarStatusSync('syncing');
+        let totalMigrados = 0;
+        const manuais = ['freela', 'vagas', 'concursos'];
+
+        for (let i = 0; i < localStorage.length; i++) {
+            let chave = localStorage.key(i);
+            if (chave === 'tema_preferido') continue;
+            let valorBruto = localStorage.getItem(chave);
+            
+            if (!valorBruto) continue;
+
+            let conteudoObj;
+            try {
+                conteudoObj = JSON.parse(valorBruto);
+            } catch (e) {
+                conteudoObj = { texto_direto: valorBruto };
+            }
+
+            let tipoManualDetectado = tipoAtual || 'freela';
+            for (let m of manuais) {
+                if (chave.includes(m)) {
+                    tipoManualDetectado = m;
+                    break;
+                }
+            }
+
+            const { error } = await dbSupabase
+                .from('dados_cerebro')
+                .upsert({ 
+                    tipo_manual: tipoManualDetectado, 
+                    chave_dado: chave, 
+                    conteudo: conteudoObj,
+                    atualizado_em: new Date()
+                }, { onConflict: ['tipo_manual', 'chave_dado'] });
+
+            if (error) {
+                console.error(`❌ Erro ao migrar a chave "${chave}":`, error);
+            } else {
+                totalMigrados++;
+            }
+        }
+
+        atualizarStatusSync('synced');
+        console.log(`✨ Migração concluída! Total de chaves migradas: ${totalMigrados}`);
+        alert(`Migração finalizada! ${totalMigrados} registros locais foram enviados com sucesso para o Supabase.`);
     }
 
     function atualizarStatusSync(estado) {
@@ -570,12 +626,6 @@
             badge.className = "sync-status-badge";
             badge.textContent = "⚠️ Erro de Sincronização";
         }
-    }
-
-    // Sobrescrevendo o comportamento de armazenamento para usar a nuvem assíncrona
-    function obterDadosNuvemSync(chaveStorage) {
-        let salvo = localStorage.getItem(chaveStorage);
-        return salvo ? JSON.parse(salvo) : null;
     }
 
     function alternarTema() {
@@ -675,7 +725,6 @@
         if(descEl && dadosPadroesGlobais[tipo]) descEl.textContent = dadosPadroesGlobais[tipo].descricao;
         if(painelEl) painelEl.style.display = "none";
         
-        // Tenta carregar dados atualizados da nuvem antes de renderizar
         let conf = dadosPadroesGlobais[tipoAtual];
         if(conf) {
             let dadosNuvem = await carregarDaNuvem(tipoAtual, conf.storageKey);
